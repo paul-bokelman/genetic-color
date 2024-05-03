@@ -1,19 +1,24 @@
+from typing import Optional, Dict
 from random import randint
 import math
-
-# genome -> collection of genes
-# gene -> function
+from utils import chance, random_exclude
 
 class Organism:
-    def __init__(self) -> None:
-        r = self.random_gene(8)
-        g = self.random_gene(8)
-        b = self.random_gene(8)
-        self.genome = (r, g, b)
-        pass
+    def __init__(self, genome: Optional[tuple[str, str, str] ] = None) -> None:
+        self.internal_mutation_probability = 0.3 # mutation probability for gene in genome (should be in config)
 
-    def fitness(self, target_color): # distance from target color
-        # treat colors as vectors and minimize distance
+        if genome != None:
+            self.genome = genome
+        else:
+            r = self.random_gene(8)
+            g = self.random_gene(8)
+            b = self.random_gene(8)
+            self.genome = (r, g, b)
+
+    # calculate how well an organism is doing (the lower the best)
+    def fitness(self, target_color):
+
+        # treat colors as vectors and minimize distance (that's why it's lower)
         distance = math.sqrt(
             math.pow(target_color[0] - self.phenotype(self.genome[0]), 2) + math.pow(target_color[1] - self.phenotype(self.genome[1]), 2) + math.pow(target_color[2] - self.phenotype(self.genome[2]), 2)
         )
@@ -28,68 +33,109 @@ class Organism:
                 value += int(math.pow(2, i))
         return value
     
+    # create random gene with n bits (8 for this)
     def random_gene(self, length):
         gene = []
-        # 8 bit gene (0-255)
         for _ in range(length):
             gene.append(randint(0, 1))
-        # return as binary string 
         return ''.join(map(str, gene))
+    
+    # return full phenotype (rgb color)
     def full_phenotype(self):
         return (self.phenotype(self.genome[0]), self.phenotype(self.genome[1]), self.phenotype(self.genome[2]))
-    def mutate(self):
-        char_mutation_chance = 0.3
-        for gene in self.genome:
-            lg = list(gene)
-            if(randint(0, 10) <= char_mutation_chance * 10):
-                index = randint(0, len(gene) - 1)
-                lg[index] = str((1 if int(lg[index]) == 0 else 0))
-                gene = "".join(lg)
-
     
+    # mutate genome by randomly changing bits in genome
+    def mutate(self):
+        new_genome = []
+
+        for gene in self.genome: # less computation but still lot's of variety
+            if(chance(self.internal_mutation_probability)):
+                # choose a random bit and flip it's value
+                gene_str = list(gene)
+                bit_index = randint(0, 7)
+                gene_str[bit_index] = str((1 if int(gene_str[bit_index]) == 0 else 0))
+                new_genome.append("".join(gene_str))
+            else:
+                new_genome.append(gene)
+
+        self.genome = (new_genome[0], new_genome[1], new_genome[2])
 
 class Species:
     # initialize organisms to start evolving
-    def __init__(self, n_total, target_color) -> None:
-        self.n_total = n_total
-        self.organisms = []
-        self.generations = 0
+    def __init__(self, genetic_config: Dict[str, int], target_color: tuple[int, int, int]) -> None:
+        self.n_organisms = genetic_config['n_organisms']
+        self.organisms: list[Organism] = []
+        self.generation = 0
         self.target_color = target_color
-
-        for _ in range(n_total):
-            self.organisms.append(Organism())
+        self.tournament_proportion = genetic_config['tournament_proportion']
+        self.mutation_probability = genetic_config['mutation_probability']
+        self.genesis()
 
     # progress to next generation
     def evolve(self):
-        # remove out 50% worst, replace with 50% best (with random mutations)
-        next_gen = self.organisms
+        # tournament selection -> crossover -> mutation
+        self.generation += 1
+        # select % of population to duel, winners crossover, losers removed from pool
+        candidates: list[Organism] = []
 
-        for i in range(len(next_gen)):
-            for j in range(0, len(next_gen) - i - 1):
-                if next_gen[j].fitness(self.target_color) > next_gen[j + 1].fitness(self.target_color):
-                    temp = next_gen[j]
-                    next_gen[j] = next_gen[j+1]
-                    next_gen[j+1] = temp
+        # tournament selection for crossover candidates
+        for _ in range(math.floor((self.n_organisms * self.tournament_proportion) / 2)):
+            p1_index = randint(0, len(self.organisms) - 1)
+            participant1 = self.organisms[p1_index] 
+            p2_index = random_exclude(p1_index)
+            participant2 = self.organisms[p2_index]
 
-
-        # remove lower half of organisms
-        proceeding_organisms = next_gen[0:int(len(next_gen) /  2)]
-        new_organisms = []
-        self.organisms = proceeding_organisms
-
-        # add new organisms with chance of mutation
-        mutation_chance = 0.4
-        for proceeding_organism in proceeding_organisms:
-            if(randint(0, 10) <= mutation_chance * 10):
-                proceeding_organism.mutate()
-                new_organisms.append(proceeding_organism)
+            # whoever has better fitness is added to candidate pool, loser is removed from species
+            if(participant1.fitness(self.target_color) < participant2.fitness(self.target_color)):
+                candidates.append(participant1)
+                self.organisms.pop(p2_index)
             else:
-                new_organisms.append(proceeding_organism)
+                candidates.append(participant2)
+                self.organisms.pop(p1_index)
 
-        self.organisms = [*proceeding_organisms, *new_organisms]
+        # uneven number of candidates, add 1 
+        if(len(candidates) % 2 != 0):
+            candidates.append(self.organisms[randint(0, len(self.organisms) - 1)])
+
+        candidate_middle_index = int(len(candidates) / 2)
+
+        # crossover for all pairs of candidates
+        for (parent1, parent2) in zip(candidates[:candidate_middle_index], candidates[candidate_middle_index:]):
+            self.crossover(parent1, parent2)
+
     
+    # split genome in random place and combine with chance of mutation 
+    def crossover(self, parent1: Organism, parent2: Organism):
+        position = randint(0, 23) # choose position between 1-24 (3 genes of length 8)
+
+        parent1_genome_str = "".join(parent1.genome)
+        parent2_genome_str = "".join(parent2.genome)
+        (parent1_l_genome,parent1_r_genome) = (parent1_genome_str[:position], parent1_genome_str[position:])
+        (parent2_l_genome,parent2_r_genome) = (parent2_genome_str[:position], parent2_genome_str[position:])
+
+        # created 2 children (with chance of mutation) from spliced genome
+        for combined_genome in ([parent1_l_genome + parent2_r_genome, parent2_l_genome + parent1_r_genome]):
+            child = Organism((combined_genome[:8], combined_genome[8:16], combined_genome[16:]))
+            if chance(self.mutation_probability):
+                child.mutate()
+            self.organisms.append(child)
+
+    # find the most fit organism from pool
+    def best(self):
+        best = self.organisms[0]
+        for organism in self.organisms:
+            if organism.fitness(self.target_color) < best.fitness(self.target_color):
+                best = organism
+
+        return best
+
+    # check if the best organism's phenotype matches the target color
     def reached_solution(self):
-        return self.organisms[0].fitness(self.target_color) == 0
+        return self.best().fitness(self.target_color) == 0
     
-    def set_target_color(self, target_color):
-        self.target_color = target_color
+    # initiate a new set of generations
+    def genesis(self):
+        self.generation = 0
+        self.organisms = []
+        for _ in range(self.n_organisms):
+            self.organisms.append(Organism())

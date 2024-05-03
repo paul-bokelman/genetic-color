@@ -1,67 +1,87 @@
-import pygame
-from genetic_algorithm import Species
+import math
 from random import randint
-
-# genetic algorithm
-# - generate population, score population, sort and remove bad, mutate randomly
-# - store generations
-# show generations visually
+from tkinter import ttk as tk, Tk, Canvas
+from genetic_algorithm import Species
+from utils import chance, _from_rgb
 
 
-pygame.init()
+config = {
+    "target_color": (randint(0, 255), randint(0, 255), randint(0, 255)),
+    "random_color_change_probability": 0, # probability that target color changes randomly on each cycle
+    "organism_size": 20, # size for organisms (squares)
+    "padding": 10, # window padding
+    "evo_delay": 100, #ms
+    "genetics": {
+        "n_organisms": 1296, # max organisms
+        "tournament_proportion": 0.8, # proportion of organisms that must compete to survive and breed
+        "mutation_probability": 0.4, # the chance that an offspring receives a mutation
+    }
+}
 
-(width, height) = (800, 800)
+dimensions = 2 * config['padding'] + int(math.sqrt(config['genetics']['n_organisms'])) * config['organism_size']
+species = Species(config['genetics'], config["target_color"])
 
-screen = pygame.display.set_mode((width, height))
-clock = pygame.time.Clock()
-running = True
-dt = 0
+root = Tk()
+root.title('Genetic Colors')
 
-base_square = pygame.Rect(40,40,9,9)
-target_color= (randint(0, 255), randint(0, 255), randint(0, 255))
+canvas = Canvas(root, bg=_from_rgb(species.target_color), width=dimensions, height=dimensions)
+generation_label = tk.Label(root, text=f"Generation 0 Target: {species.target_color}, Best: {species.best().full_phenotype()}")
+generation_label.pack()
 
-species = Species(300, target_color)
 
-organisms = species.organisms
-time_passed = 0
-while running:
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
+def simulate_organisms():
+    global current_after_id
+    canvas.delete('all')
+    generation_label.config(text=f"Generation {species.generation}, Target: {species.target_color}, Best: {species.best().full_phenotype()}")
+    row, col = 0, 0
+    for organism in species.organisms:
+        organism_phenotype = _from_rgb(organism.full_phenotype())
 
-    screen.fill(target_color)
+        x = config['padding'] + (config['organism_size']) * col
+        y = config['padding'] + (config['organism_size']) * row
 
-    col = -1
-    row = 0
-    for organism in organisms:
+        canvas.create_rectangle(x, y, x + config['organism_size'], y + config['organism_size'], fill=organism_phenotype, outline=organism_phenotype)
 
-        if(col * 20 >= width - 100): 
+        if((config['padding'] + (config['organism_size']) * (col + 1)) + config['organism_size'] >= dimensions):
             row += 1
             col = 0
-        else:
-            col +=1
-
-        genome = organism.full_phenotype()
-        square = pygame.Rect(base_square.left + col * 20, base_square.top + row * 20, 18, 18)
-        pygame.draw.rect(screen, genome, square)
-
+        else: 
+            col += 1
     
-    if(species.reached_solution()):
-        print("Solution found in generation: ", species.generations)
-        running = False
-
-    pygame.display.flip()
-
-    dt = clock.tick(60) / 1000
-
-    time_passed += dt
-
-    if time_passed > 0.5:
-        print('evolving')
-        species.evolve()
-        organisms = species.organisms
-        time_passed = 0
-        
+    # randomly change color
+    if(chance(config['random_color_change_probability'])): 
+        species.target_color = (randint(0, 255), randint(0, 255), randint(0, 255))
+        canvas.configure(bg=_from_rgb(species.target_color))
 
 
-pygame.quit()
+    # if a solution has been reached, stop the sim and display in console
+    if not species.reached_solution():
+        id = canvas.after(config['evo_delay'], simulate_organisms)
+        current_after_id = id
+        species.evolve() 
+    else:
+        print(f'Solution reached after {species.generation} generation(s)')
+
+
+simulate_organisms() 
+canvas.pack()
+
+# change target color command
+def change_target_color():
+    species.target_color = (randint(0, 255), randint(0, 255), randint(0, 255))
+    canvas.configure(bg=_from_rgb(species.target_color))
+
+# restart sim command
+def restart_simulation():
+    species.genesis()
+    canvas.delete("all")
+    canvas.after_cancel(current_after_id)
+    simulate_organisms()
+
+
+tk.Button(text="Change Color", command=change_target_color).pack()
+tk.Button(text="Restart", command=restart_simulation).pack()
+
+
+root.mainloop()
+
